@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     # 同步到模块仓库后不重复构建，也不向镜像仓库提供签名材料。
-    if: github.repository == 'lm060719/io.mo.glassmic'
+    if: true
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
