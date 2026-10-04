@@ -26,6 +26,11 @@ import kotlin.concurrent.thread
  * - audio thread 完全不调 Java，只读 native 端原子；避免 RT 线程跨 JNI/Binder 引发卡顿
  * - nativeDrainStats() 的 reads 是真实录音回调心跳；没有回调的子进程不应打开 PCM Provider
  * - 停止录音一段时间后主动关闭 fd，让 Publisher 及时移除无效 consumer
+ *
+ * Stealth mode:
+ * - الحزم الموجودة في STEALTH_PACKAGES بتتجنب تحميل libglassmic_native.so
+ * - الـ Java hook على AudioRecord.read() بيشتغل عادي من الـ zygote inheritance
+ * - بكده libglassmic_native.so ما بيظهرش في /proc/self/maps وبيتجنب كشف الـ anticheat
  */
 object NativeAAudioHook {
 
@@ -34,6 +39,30 @@ object NativeAAudioHook {
     private const val PCM_OPEN_ACTIVITY_WINDOW_MS = 500L
     private const val PCM_CLOSE_IDLE_MS = 1_500L
     private const val TAP_RETRY_MS = 15_000L
+
+    /**
+     * حزم الألعاب التي عندها anticheat حساس لتحميل native libraries غريبة.
+     * في هذه الحزم: ShadowHook و libglassmic_native.so ما بيتحملوش خالص.
+     * الـ Java hook على AudioRecord.read() بيشتغل كافي عن طريق zygote inheritance.
+     */
+    private val STEALTH_PACKAGES = setOf(
+        // Free Fire variants
+        "com.dts.freefireth",
+        "com.dts.freefiremax",
+        "com.garena.game.fftw",
+        // PUBG Mobile variants
+        "com.pubg.imobile",
+        "com.pubg.krmobile",
+        "com.tencent.tmgp.pubgmhd",
+        "com.rekoo.pubgm",
+        // Call of Duty Mobile
+        "com.activision.callofduty.shooter",
+        "com.garena.game.codm",
+        "com.vng.codmvn",
+        "com.tencent.tmgp.kr.codm",
+        // Oxide Survival Island
+        "com.catsbit.oxidesurvivalisland",
+    )
 
     private val installed = AtomicBoolean(false)
     @Volatile private var pollerStarted = false
@@ -49,6 +78,20 @@ object NativeAAudioHook {
 
     fun install(ctx: Context, callerPackage: String): Boolean {
         if (!installed.compareAndSet(false, true)) return true
+
+        // ── Stealth mode: تجاهل native hook للألعاب المحمية ──────────────────
+        // libglassmic_native.so + libshadowhook.so بيظهروا في /proc/self/maps
+        // وده بيكشف الحقن لأنظمة الـ anticheat. الـ Java AudioRecord.read() hook
+        // بيشتغل من الـ zygote inheritance بدون ما يحتاج native lib في العملية.
+        if (callerPackage in STEALTH_PACKAGES) {
+            android.util.Log.i(
+                TAG,
+                "stealth mode: skipping native hook in $callerPackage — Java hook active via zygote"
+            )
+            // installed بيفضل true عشان ما يتنادى تاني لو بتعمل reinit
+            return true
+        }
+        // ─────────────────────────────────────────────────────────────────────
 
         // 1. shadowhook 初始化（含 dlopen 自身 .so）
         val initOk = runCatching {
